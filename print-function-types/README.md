@@ -6,3 +6,4 @@ Uses the typescript compiler to parse a given JavaScript file path and print the
 node print-function-types.js ./my-file.js
 ```
 
+This is adapted from TS compiler API [examples](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API)
