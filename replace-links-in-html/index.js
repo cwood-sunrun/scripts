@@ -116,7 +116,7 @@ const traverse = (node) => {
   if (!node) return results;
 
   if (Array.isArray(node)) {
-    const rootArrayResults = node.reduc((acc, innerNode) => {
+    const rootArrayResults = node.reduce((acc, innerNode) => {
       const results = traverse(innerNode)
       acc = [...acc, ...results];
       return acc;
@@ -156,7 +156,7 @@ const main = async () => {
     // Parse the HTML into an AST
     const document = parse5.parse(contents);
 
-    // Traverse the AST to collect social relevant links
+    // Traverse the AST to collect relevant matches 
     const links = traverse(document);
 
     // Substitue matched links for new links in raw file contents (we could also alter the AST and re-print, but I don't care to fight with the additional complexity of EJS)
