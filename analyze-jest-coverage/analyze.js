@@ -1,6 +1,5 @@
 const { readFileSync } = require('fs');
 
-
 const ABSOLUTE_PATH_PREFIX = ''
 const COVERAGE_SUMMARY_FILE = '';
 const GIT_CHURN_FILE = '';
@@ -12,7 +11,6 @@ const changes = rawChanges
   .map(line => line.trim().split(' '))
   .map(([count, file]) => [Number(count), file]);
 
-
 // The coverage summary report file paths are absolute while git churn is relative
 const makePathRelative = path => {
   return path.replace(ABSOLUTE_PATH_PREFIX, '');
@@ -23,7 +21,6 @@ const getChangeCount = filePath => {
 };
 
 const coverage = JSON.parse(readFileSync(COVERAGE_SUMMARY_FILE, 'utf8'));
-
 const files = Object.keys(coverage);
 
 for (const file of files) {
