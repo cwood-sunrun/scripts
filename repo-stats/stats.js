@@ -14,7 +14,6 @@ function getPeriodStarts(utcDateString, periodType, count) {
     let periodStart;
     if (periodType === 'weekly') {
       const day = date.getUTCDay();
-      console.log("day", day);
       const diff = (day + 6) % 7; 
       periodStart = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() - diff));
       date = new Date(periodStart);
@@ -63,7 +62,6 @@ const getStats = async () => {
 
   const results = []
   for (const date of startDates) {
-    console.log(date);
     const periodResults = await collectStats(date, branch);
     results.push([date, periodResults]);
   }
