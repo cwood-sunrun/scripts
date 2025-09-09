@@ -1,33 +1,45 @@
-const { readFileSync } = require('fs');
+const { promisify } = require("util");
+const exec = promisify(require("child_process").exec);
+const { readFileSync } = require("fs");
 
-const ABSOLUTE_PATH_PREFIX = ''
-const COVERAGE_SUMMARY_FILE = '';
-const GIT_CHURN_FILE = '';
+const ABSOLUTE_PATH_PREFIX = "";
 
-const rawChanges = readFileSync(GIT_CHURN_FILE, 'utf8');
+async function main() {
+  const [_nodePath, _scriptPath, coverageSummaryPath] = process.argv;
 
-const changes = rawChanges
-  .split('\n')
-  .map(line => line.trim().split(' '))
-  .map(([count, file]) => [Number(count), file]);
+  if (!coverageSummaryPath) {
+    throw new Error("Must provide coverage summary file path");
+  }
 
-// The coverage summary report file paths are absolute while git churn is relative
-const makePathRelative = path => {
-  return path.replace(ABSOLUTE_PATH_PREFIX, '');
-};
+  const churnResult = await exec(
+    `git log --all -M -C --name-only --format='format:' "$@" | sort | grep -v '^$' | uniq -c | sort -n`,
+  );
 
-const getChangeCount = filePath => {
-  return changes.find(([_, path]) => path === filePath);
-};
+  const changes = churnResult.stdout
+    .split("\n")
+    .map((line) => line.trim().split(" "))
+    .map(([count, file]) => [Number(count), file]);
 
-const coverage = JSON.parse(readFileSync(COVERAGE_SUMMARY_FILE, 'utf8'));
-const files = Object.keys(coverage);
+  // The coverage summary report file paths are absolute while git churn is relative
+  const makePathRelative = (path) => {
+    return path.replace(ABSOLUTE_PATH_PREFIX, "");
+  };
 
-for (const file of files) {
-  const changeTuple = getChangeCount(makePathRelative(file));
-  if (changeTuple) {
-    const [changeCount] = changeTuple;
-    const { branches, statements } = coverage[file];
-    console.log(file, changeCount, branches.pct, statements.pct);
+  const getChangeCount = (filePath) => {
+    return changes.find(([_, path]) => path === filePath);
+  };
+
+  const coverage = JSON.parse(readFileSync(coverageSummaryPath, "utf8"));
+  const files = Object.keys(coverage);
+
+  for (const file of files) {
+    const changeTuple = getChangeCount(makePathRelative(file));
+    if (changeTuple) {
+      const [changeCount] = changeTuple;
+      const { branches, statements } = coverage[file];
+      console.log(file, changeCount, branches.pct, statements.pct);
+    }
   }
 }
+
+main().then().catch(console.error);
