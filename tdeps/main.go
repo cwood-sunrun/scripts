@@ -60,7 +60,7 @@ func countTransitiveDeps(packageName string, packageLock PackageLock) int {
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: dep-graph <path-to-json-file>")
+		fmt.Fprintln(os.Stderr, "Usage: tdeps <path-to-json-file>")
 		os.Exit(1)
 	}
 
