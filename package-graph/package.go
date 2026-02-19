@@ -1,7 +1,5 @@
 package main
 
-import "encoding/json"
-
 type PackageInfo struct {
 	Version         string            `json:"version,omitempty"`
 	Resolved        string            `json:"resolved,omitempty"`
@@ -10,9 +8,6 @@ type PackageInfo struct {
 	Optional        bool              `json:"optional,omitempty"`
 	Dependencies    map[string]string `json:"dependencies,omitempty"`
 	DevDependencies map[string]string `json:"devDependencies,omitempty"`
-	Engines         map[string]string `json:"engines,omitempty"`
-	Funding         json.RawMessage   `json:"funding,omitempty"`
-	License         string            `json:"license,omitempty"`
 }
 
 type PackageLock struct {
