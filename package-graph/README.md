@@ -1,4 +1,4 @@
-## Transitive Dependency Counter
+## Package Graph 
 
 Given a package-lock.json file, output an html file that visualizes the dependency graph of the project. 
 
