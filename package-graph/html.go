@@ -177,6 +177,99 @@ func generateHTML(graphData GraphData, projectName string) string {
             font-size: 12px;
             padding: 8px 14px;
         }
+        .node-info {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 300px;
+            max-height: 400px;
+            background: rgba(26, 26, 46, 0.95);
+            border: 1px solid #4a5568;
+            border-radius: 10px;
+            color: #e0e0e0;
+            font-size: 14px;
+            display: none;
+            z-index: 10;
+        }
+        .node-info.visible {
+            display: flex;
+            flex-direction: column;
+        }
+        .node-info-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-bottom: 1px solid #4a5568;
+            flex-shrink: 0;
+        }
+        .node-info-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            min-width: 0;
+        }
+        .node-info-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .node-info-name {
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .node-info-close {
+            background: none;
+            border: none;
+            color: #718096;
+            font-size: 20px;
+            cursor: pointer;
+            padding: 0 0 0 8px;
+            line-height: 1;
+            flex-shrink: 0;
+        }
+        .node-info-close:hover {
+            color: #e0e0e0;
+        }
+        .node-info-body {
+            padding: 12px 16px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .node-info-section {
+            color: #718096;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+        .node-info-conn {
+            padding: 6px 10px;
+            cursor: pointer;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+        .node-info-conn:hover {
+            background: rgba(52, 152, 219, 0.2);
+        }
+        .node-info-conn-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .node-info-empty {
+            color: #718096;
+            font-size: 13px;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
@@ -217,6 +310,7 @@ func generateHTML(graphData GraphData, projectName string) string {
             <input type="text" id="searchInput" placeholder="Search packages..." />
             <div class="search-results" id="searchResults"></div>
         </div>
+        <div class="node-info" id="nodeInfo"></div>
         <div class="tooltip" id="tooltip"></div>
     </div>
     <script>
@@ -338,10 +432,11 @@ func generateHTML(graphData GraphData, projectName string) string {
             event.stopPropagation();
             
             if (selectedNodeId === d.id) {
-                // Clicking same node clears selection
                 selectedNodeId = null;
+                hideNodeInfo();
             } else {
                 selectedNodeId = d.id;
+                showNodeInfo(d);
             }
             
             updateDimming();
@@ -352,6 +447,7 @@ func generateHTML(graphData GraphData, projectName string) string {
             if (selectedNodeId !== null) {
                 selectedNodeId = null;
                 updateDimming();
+                hideNodeInfo();
             }
         });
 
@@ -491,6 +587,103 @@ func generateHTML(graphData GraphData, projectName string) string {
 
             selectedNodeId = nodeData.id;
             updateDimming();
+            showNodeInfo(nodeData);
+        }
+
+        const nodeInfo = document.getElementById('nodeInfo');
+        const nodeById = new Map(data.nodes.map(n => [n.id, n]));
+        const groupLabels = { 0: 'Root', 1: 'Production', 2: 'Dev', 3: 'Transitive' };
+
+        function getConnections(nodeId) {
+            const conns = [];
+            data.links.forEach(l => {
+                const srcId = typeof l.source === 'object' ? l.source.id : l.source;
+                const tgtId = typeof l.target === 'object' ? l.target.id : l.target;
+                if (srcId === nodeId) {
+									const existingConns = conns.filter(connection => connection.id === tgtId && connection.direction === 'out');
+									if (!existingConns.length) {
+										conns.push({ id: tgtId, direction: 'out' });
+									}
+								}
+                else if (tgtId === nodeId) {
+									const existingConns = conns.filter(connection => connection.id === srcId && connection.direction === 'in');
+									if (!existingConns.length) {
+										conns.push({ id: srcId, direction: 'in' });
+									}	
+								}
+            });
+            conns.sort((a, b) => a.id.localeCompare(b.id));
+            return conns;
+        }
+
+        function showNodeInfo(d) {
+            const conns = getConnections(d.id);
+            nodeInfo.innerHTML = '';
+
+            const header = document.createElement('div');
+            header.className = 'node-info-header';
+            const title = document.createElement('div');
+            title.className = 'node-info-title';
+            const dot = document.createElement('div');
+            dot.className = 'node-info-dot';
+            dot.style.background = colorScale(d.group);
+            const name = document.createElement('span');
+            name.className = 'node-info-name';
+            name.textContent = d.id;
+            name.title = d.id;
+            title.appendChild(dot);
+            title.appendChild(name);
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'node-info-close';
+            closeBtn.innerHTML = '&#215;';
+            closeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                selectedNodeId = null;
+                updateDimming();
+                hideNodeInfo();
+            });
+            header.appendChild(title);
+            header.appendChild(closeBtn);
+            nodeInfo.appendChild(header);
+
+            const body = document.createElement('div');
+            body.className = 'node-info-body';
+            const sectionLabel = document.createElement('div');
+            sectionLabel.className = 'node-info-section';
+            sectionLabel.textContent = 'Connections (' + conns.length + ')';
+            body.appendChild(sectionLabel);
+
+            if (conns.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'node-info-empty';
+                empty.textContent = 'No connections';
+                body.appendChild(empty);
+            } else {
+                conns.forEach(c => {
+                    const connNode = nodeById.get(c.id);
+                    if (!connNode) return;
+                    const item = document.createElement('div');
+                    item.className = 'node-info-conn';
+                    const cDot = document.createElement('div');
+                    cDot.className = 'node-info-conn-dot';
+                    cDot.style.background = colorScale(connNode.group);
+                    const cLabel = document.createElement('span');
+                    cLabel.textContent = c.id;
+                    item.appendChild(cDot);
+                    item.appendChild(cLabel);
+                    item.addEventListener('click', () => {
+                        centerOnNode(connNode);
+                    });
+                    body.appendChild(item);
+                });
+            }
+
+            nodeInfo.appendChild(body);
+            nodeInfo.classList.add('visible');
+        }
+
+        function hideNodeInfo() {
+            nodeInfo.classList.remove('visible');
         }
 
         function performSearch(term) {
