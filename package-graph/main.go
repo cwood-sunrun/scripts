@@ -83,16 +83,29 @@ func buildGraph(packageLock PackageLock) GraphData {
 		}
 		links = append(links, GraphLink{Source: rootName, Target: depName})
 
-		// Add transitive dependencies
-		pkgPath := "node_modules/" + depName
-		pkg, exists := packageLock.Packages[pkgPath]
-		if exists {
+		// BFS to add all transitive dependencies
+		queue := []string{depName}
+		visited := make(map[string]bool)
+		visited[depName] = true
+		for len(queue) > 0 {
+			current := queue[0]
+			queue = queue[1:]
+
+			pkgPath := "node_modules/" + current
+			pkg, exists := packageLock.Packages[pkgPath]
+			if !exists {
+				continue
+			}
 			for transDepName := range pkg.Dependencies {
 				if !nodeSet[transDepName] {
 					nodes = append(nodes, GraphNode{ID: transDepName, Group: GroupTransitive, Size: 5})
 					nodeSet[transDepName] = true
 				}
-				links = append(links, GraphLink{Source: depName, Target: transDepName})
+				links = append(links, GraphLink{Source: current, Target: transDepName})
+				if !visited[transDepName] {
+					visited[transDepName] = true
+					queue = append(queue, transDepName)
+				}
 			}
 		}
 	}

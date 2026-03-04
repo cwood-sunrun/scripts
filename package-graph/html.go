@@ -113,6 +113,70 @@ func generateHTML(graphData GraphData, projectName string) string {
             transition: opacity 0.2s;
             border: 1px solid #4a5568;
         }
+        .search-box {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 280px;
+            z-index: 10;
+        }
+        .search-box input {
+            width: 100%;
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid #4a5568;
+            background: rgba(26, 26, 46, 0.9);
+            color: #e0e0e0;
+            font-size: 14px;
+            font-family: inherit;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .search-box input::placeholder {
+            color: #718096;
+        }
+        .search-box input:focus {
+            border-color: #3498db;
+        }
+        .search-results {
+            margin-top: 4px;
+            background: rgba(26, 26, 46, 0.95);
+            border: 1px solid #4a5568;
+            border-radius: 8px;
+            max-height: 320px;
+            overflow-y: auto;
+            display: none;
+        }
+        .search-results.visible {
+            display: block;
+        }
+        .search-result-item {
+            padding: 8px 14px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #e0e0e0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid rgba(74, 85, 104, 0.4);
+        }
+        .search-result-item:last-child {
+            border-bottom: none;
+        }
+        .search-result-item:hover {
+            background: rgba(52, 152, 219, 0.2);
+        }
+        .search-result-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .search-result-count {
+            color: #718096;
+            font-size: 12px;
+            padding: 8px 14px;
+        }
     </style>
 </head>
 <body>
@@ -148,6 +212,10 @@ func generateHTML(graphData GraphData, projectName string) string {
                     <span>Transitive Dependency</span>
                 </label>
             </div>
+        </div>
+        <div class="search-box">
+            <input type="text" id="searchInput" placeholder="Search packages..." />
+            <div class="search-results" id="searchResults"></div>
         </div>
         <div class="tooltip" id="tooltip"></div>
     </div>
@@ -408,6 +476,71 @@ func generateHTML(graphData GraphData, projectName string) string {
                 
                 updateVisibility();
             });
+        });
+
+        // Search functionality
+        const searchInput = document.getElementById('searchInput');
+        const searchResults = document.getElementById('searchResults');
+
+        function centerOnNode(nodeData) {
+            const scale = 1.5;
+            const tx = width / 2 - nodeData.x * scale;
+            const ty = height / 2 - nodeData.y * scale;
+            svg.transition().duration(750)
+                .call(zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(scale));
+
+            selectedNodeId = nodeData.id;
+            updateDimming();
+        }
+
+        function performSearch(term) {
+            searchResults.innerHTML = '';
+            if (!term) {
+                searchResults.classList.remove('visible');
+                return;
+            }
+            const lower = term.toLowerCase();
+            const matches = data.nodes.filter(n => n.id.toLowerCase().includes(lower));
+            if (matches.length === 0) {
+                searchResults.innerHTML = '<div class="search-result-count">No matches</div>';
+                searchResults.classList.add('visible');
+                return;
+            }
+            const countEl = document.createElement('div');
+            countEl.className = 'search-result-count';
+            countEl.textContent = matches.length + ' result' + (matches.length === 1 ? '' : 's');
+            searchResults.appendChild(countEl);
+            matches.sort((a, b) => a.id.localeCompare(b.id));
+            matches.forEach(m => {
+                const item = document.createElement('div');
+                item.className = 'search-result-item';
+                const dot = document.createElement('div');
+                dot.className = 'search-result-dot';
+                dot.style.background = colorScale(m.group);
+                const label = document.createElement('span');
+                label.textContent = m.id;
+                item.appendChild(dot);
+                item.appendChild(label);
+                item.addEventListener('click', () => {
+                    centerOnNode(m);
+                    searchResults.classList.remove('visible');
+                    searchInput.value = m.id;
+                });
+                searchResults.appendChild(item);
+            });
+            searchResults.classList.add('visible');
+        }
+
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                performSearch(searchInput.value.trim());
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.search-box')) {
+                searchResults.classList.remove('visible');
+            }
         });
     </script>
 </body>
