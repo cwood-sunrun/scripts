@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+FILE_THRESHOLD=5
+LINE_THRESHOLD=100
+## Assumes develpo branch by convention
+DEFAULT_BRANCH="develop"
+
+MERGE_BASE=$(git merge-base HEAD "origin/${DEFAULT_BRANCH}" 2>/dev/null || git merge-base HEAD "${DEFAULT_BRANCH}" 2>/dev/null || "")
+
+if [ -z "$MERGE_BASE" ]; then
+  exit 0
+fi
+
+CHANGED_FILES=$(git diff --name-only "$MERGE_BASE" | wc -l | tr -d ' ')
+CHANGED_LINES=$(git diff --stat "$MERGE_BASE" | tail -1 | grep -oE '[0-9]+ insertion|[0-9]+ deletion' | grep -oE '[0-9]+' | paste -sd+ - | bc)
+CHANGED_LINES=${CHANGED_LINES:-0}
+
+if [ "$CHANGED_FILES" -gt "$FILE_THRESHOLD" ]; then
+  echo "Warning! This branch changed ${CHANGED_FILES} files relative to ${DEFAULT_BRANCH}."
+  exit 1
+fi
+
+if [ "$CHANGED_LINES" -gt "$LINE_THRESHOLD" ]; then
+  echo "Warning! This branch changed ${CHANGED_LINES} lines of code relative to ${DEFAULT_BRANCH}."
+  exit 1
+fi
+
+exit 0
