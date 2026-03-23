@@ -8,25 +8,16 @@ fi
 
 CHANGE_DESCRIPTION="$1"
 TARGET_SLACK_GROUP=""
+DEFAULT_BRANCH="develop"
 
 URL=$(gh pr view --json url -q .url)
 FILE_COUNT=$(gh pr view --json files --jq '.files | length')
 
-if [ "$FILE_COUNT" -lt 2 ]; then
-  PR_SIZE_CATEGORY="Micro"
-elif [ "$FILE_COUNT" -le 3 ]; then
-  PR_SIZE_CATEGORY="Tiny"
-elif [ "$FILE_COUNT" -le 5 ]; then
-  PR_SIZE_CATEGORY="Small"
-else
-  PR_SIZE_CATEGORY=""
-fi
+MERGE_BASE=$(git merge-base HEAD "origin/${DEFAULT_BRANCH}" 2>/dev/null || git merge-base HEAD "${DEFAULT_BRANCH}" 2>/dev/null || "")
+INSERTIONS=$(git diff --stat "$MERGE_BASE" | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)
+DELETIONS=$(git diff --stat "$MERGE_BASE" | tail -1 | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo 0)
 
-if [ -n "$PR_SIZE_CATEGORY" ]; then
-  MESSAGE="{TARGET_SLACK_GROUP} {PR_SIZE_CATEGORY} pr to ${CHANGE_DESCRIPTION}: ${URL}"
-else
-  MESSAGE="{TARGET_SLACK_GROUP} pr to ${CHANGE_DESCRIPTION}: ${URL}"
-fi
+MESSAGE="${TARGET_SLACK_GROUP} pr to ${CHANGE_DESCRIPTION} [+${INSERTIONS}, -${DELETIONS}]: ${URL}"
 
 echo "$MESSAGE" | pbcopy
 echo "Copied to clipboard: $MESSAGE"
