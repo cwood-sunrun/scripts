@@ -27,6 +27,16 @@ function fetchMasterMerges(repo, sinceDate) {
     .sort((a, b) => new Date(a.mergedAt) - new Date(b.mergedAt));
 }
 
+/** Commit count on the PR (GitHub REST `commits` field). Cached per repo + PR. */
+function pullCommitCount(cache, repo, prNumber) {
+  const key = `${repo}#${prNumber}`;
+  if (cache.has(key)) return cache.get(key);
+  const details = gh(`gh api repos/${repo}/pulls/${prNumber}`);
+  const n = details.commits ?? 0;
+  cache.set(key, n);
+  return n;
+}
+
 function findMasterMerge(featureMergedAt, masterMerges) {
   return masterMerges.find((mm) => new Date(mm.mergedAt) >= featureMergedAt);
 }
@@ -128,6 +138,7 @@ const repos = readFileSync(resolvedPath, "utf-8")
   .filter(Boolean);
 
 const results = [];
+const masterPrCommitCache = new Map();
 
 for (const repo of repos) {
   let featurePRs, masterMerges;
@@ -155,16 +166,21 @@ for (const repo of repos) {
       landedAt,
       leadTime: landedAt - createdAt,
       masterPR: masterMerge.number,
+      masterPRCommits: pullCommitCount(
+        masterPrCommitCache,
+        repo,
+        masterMerge.number,
+      ),
     });
   }
 }
 
 results.sort((a, b) => a.createdAt - b.createdAt);
 
-console.log("repo, pr, master_pr, lead_time_seconds");
+console.log("repo, pr, master_pr, master_pr_commits, lead_time_seconds");
 for (const r of results) {
   console.log(
-    `${r.repo}, ${r.number}, ${r.masterPR}, ${Math.floor(r.leadTime / 1_000)}`,
+    `${r.repo}, ${r.number}, ${r.masterPR}, ${r.masterPRCommits}, ${Math.floor(r.leadTime / 1_000)}`,
   );
 }
 
