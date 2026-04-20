@@ -1,0 +1,172 @@
+#!/usr/bin/env node
+/**
+ * Given a GitHub PR URL, lists Jira ticket keys found in commit titles (first line)
+ * and prints markdown with each ticket's Jira status (via Atlassian CLI).
+ *
+ * Usage: node collect-jira-pr.js <github-pr-url>
+ *
+ * Requires: `gh` (GitHub CLI), `acli` (Atlassian CLI)
+ */
+
+const { execSync } = require("child_process");
+
+const JIRA_BASE = "https://sunrun.jira.com/browse";
+/** Matches Jira-style keys: one or more A–Z, hyphen, digits (e.g. CA-7231) */
+const JIRA_KEY_RE = /\b([A-Z]+-\d+)\b/g;
+
+function usage() {
+  console.error("Usage: node collect-jira-pr.js <github-pr-url>");
+  process.exit(1);
+}
+
+/**
+ * @param {string} url
+ * @returns {{ owner: string; repo: string; number: string }}
+ */
+function parseGithubPrUrl(url) {
+  const m = String(url).match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/i);
+  if (!m) {
+    throw new Error(`Not a GitHub PR URL: ${url}`);
+  }
+  return { owner: m[1], repo: m[2], number: m[3] };
+}
+
+/**
+ * @param {string} s
+ * @returns {string}
+ */
+function sanitizeMarkdownLinkLabel(s) {
+  return String(s).replace(/\s+/g, " ").trim().replace(/[[\]]/g, "");
+}
+
+/**
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} number
+ * @returns {string}
+ */
+function canonicalGithubPrUrl(owner, repo, number) {
+  return `https://github.com/${owner}/${repo}/pull/${number}`;
+}
+
+/**
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} number
+ * @returns {Array<{ commit: { message: string } }>}
+ */
+function fetchPrCommits(owner, repo, number) {
+  const endpoint = `repos/${owner}/${repo}/pulls/${number}/commits`;
+  const out = execSync(`gh api "${endpoint}" --paginate`, {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const data = JSON.parse(out);
+  if (!Array.isArray(data)) {
+    throw new Error(
+      "Unexpected gh api response: expected a JSON array of commits",
+    );
+  }
+  return data;
+}
+
+/**
+ * First line of commit message = title
+ * @param {string} message
+ */
+function commitTitle(message) {
+  const line = String(message).split(/\r?\n/, 1)[0];
+  return line ?? "";
+}
+
+/**
+ * Unique keys in order of first appearance across commits (API order = oldest first typically).
+ * @param {Array<{ commit: { message: string } }>} commits
+ * @returns {string[]}
+ */
+function orderedUniqueJiraKeys(commits) {
+  const ordered = [];
+  const seen = new Set();
+  for (const c of commits) {
+    const title = commitTitle(c.commit?.message ?? "");
+    JIRA_KEY_RE.lastIndex = 0;
+    let m;
+    while ((m = JIRA_KEY_RE.exec(title)) !== null) {
+      const key = m[1];
+      if (!seen.has(key)) {
+        seen.add(key);
+        ordered.push(key);
+      }
+    }
+  }
+  return ordered;
+}
+
+/**
+ * @param {string} key
+ * @returns {{ statusName: string; summary: string }}
+ */
+function getJiraStatusAndSummary(key) {
+  const out = execSync(`acli jira workitem view ${key} --json`, {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const data = JSON.parse(out);
+  const statusName = data.fields?.status?.name;
+  const rawSummary = data.fields?.summary;
+  const statusNameOut =
+    typeof statusName === "string" && statusName.trim()
+      ? statusName.trim()
+      : "UNKNOWN";
+  let summaryOut = "";
+  if (typeof rawSummary === "string" && rawSummary.trim()) {
+    summaryOut = sanitizeMarkdownLinkLabel(rawSummary);
+  }
+  if (!summaryOut) {
+    summaryOut = "(no summary)";
+  }
+  return { statusName: statusNameOut, summary: summaryOut };
+}
+
+function main() {
+  const prUrl = process.argv[2];
+  if (!prUrl) {
+    usage();
+  }
+
+  const { owner, repo, number } = parseGithubPrUrl(prUrl);
+  const githubPrHref = canonicalGithubPrUrl(owner, repo, number);
+  let commits;
+  try {
+    commits = fetchPrCommits(owner, repo, number);
+  } catch (err) {
+    console.error(
+      "Failed to list PR commits (is `gh` installed and authenticated?):",
+      err.message,
+    );
+    process.exit(1);
+  }
+
+  const keys = orderedUniqueJiraKeys(commits);
+  if (keys.length === 0) {
+    console.error("No Jira ticket identifiers found in commit titles.");
+    process.exit(0);
+  }
+
+  for (const key of keys) {
+    let status;
+    let summary;
+    try {
+      ({ statusName: status, summary } = getJiraStatusAndSummary(key));
+    } catch (err) {
+      console.error(`acli failed for ${key}:`, err.message);
+      status = "ERROR";
+      summary = "(no summary)";
+    }
+    const jiraLink = `[${key} - ${summary}](${JIRA_BASE}/${key})`;
+    const prLink = `([PR](${githubPrHref}))`;
+    process.stdout.write(`${jiraLink} - ${status} ${prLink}\n`);
+  }
+}
+
+main();
