@@ -11,6 +11,10 @@ function getRepoFileContents(owner, repo, relativeFilePath) {
     },
   );
 
+  if (r.status !== 0) {
+    return null;
+  }
+
   // TDOO error handle / missing file
   const response = JSON.parse(r.stdout);
   const decodecContent = Buffer.from(response.content, "base64").toString(
