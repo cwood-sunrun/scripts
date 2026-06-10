@@ -50,6 +50,24 @@ function canonicalGithubPrUrl(owner, repo, number) {
 }
 
 /**
+ * Returns the body of the first PR associated with a commit sha, or empty string.
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} sha
+ * @returns {string}
+ */
+function fetchCommitPrBody(owner, repo, sha) {
+  const endpoint = `repos/${owner}/${repo}/commits/${sha}/pulls`;
+  const out = execSync(`gh api "${endpoint}"`, {
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const data = JSON.parse(out);
+  if (!Array.isArray(data) || data.length === 0) return "";
+  return data[0].body ?? "";
+}
+
+/**
  * @param {string} owner
  * @param {string} repo
  * @param {string} number
@@ -80,19 +98,47 @@ function commitTitle(message) {
 }
 
 /**
- * Unique keys in order of first appearance across commits (API order = oldest first typically).
- * @param {Array<{ commit: { message: string } }>} commits
+ * Extract all unique Jira keys from a string in order of first appearance.
+ * @param {string} text
  * @returns {string[]}
  */
-function orderedUniqueJiraKeys(commits) {
+function jiraKeysFromText(text) {
+  const keys = [];
+  const seen = new Set();
+  JIRA_KEY_RE.lastIndex = 0;
+  let m;
+  while ((m = JIRA_KEY_RE.exec(text)) !== null) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1]);
+      keys.push(m[1]);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Unique keys in order of first appearance across commits (API order = oldest first typically).
+ * If a commit title has no Jira key, falls back to the body of the PR associated with that commit.
+ * @param {string} owner
+ * @param {string} repo
+ * @param {Array<{ sha: string; commit: { message: string } }>} commits
+ * @returns {string[]}
+ */
+function orderedUniqueJiraKeys(owner, repo, commits) {
   const ordered = [];
   const seen = new Set();
   for (const c of commits) {
     const title = commitTitle(c.commit?.message ?? "");
-    JIRA_KEY_RE.lastIndex = 0;
-    let m;
-    while ((m = JIRA_KEY_RE.exec(title)) !== null) {
-      const key = m[1];
+    let keys = jiraKeysFromText(title);
+    if (keys.length === 0) {
+      try {
+        const body = fetchCommitPrBody(owner, repo, c.sha);
+        keys = jiraKeysFromText(body);
+      } catch {
+        // no associated PR or API error — skip silently
+      }
+    }
+    for (const key of keys) {
       if (!seen.has(key)) {
         seen.add(key);
         ordered.push(key);
@@ -136,6 +182,7 @@ function main() {
 
   const { owner, repo, number } = parseGithubPrUrl(prUrl);
   const githubPrHref = canonicalGithubPrUrl(owner, repo, number);
+
   let commits;
   try {
     commits = fetchPrCommits(owner, repo, number);
@@ -147,9 +194,12 @@ function main() {
     process.exit(1);
   }
 
-  const keys = orderedUniqueJiraKeys(commits);
+  const keys = orderedUniqueJiraKeys(owner, repo, commits);
+
   if (keys.length === 0) {
-    console.error("No Jira ticket identifiers found in commit titles.");
+    console.error(
+      "No Jira ticket identifiers found in commit titles or associated PR descriptions.",
+    );
     process.exit(0);
   }
 
