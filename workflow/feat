@@ -10,9 +10,23 @@ git reset --hard --quiet
 git clean -df
 
 DEFAULT_BRANCH=$(git rev-parse --abbrev-ref origin/HEAD | cut -c8-)
+JIRA_BOARD_ID=""
 
 # Branch from latest default branch
 git checkout $DEFAULT_BRANCH --quiet
 git pull --quiet
 
 git checkout -b "$args[1]"
+
+# Extract Jira key from branch name (matches pattern like CA-1234)
+JIRA_KEY=$(echo "$args[1]" | grep -oE '\b[A-Z]+-[0-9]+\b' | head -n 1)
+
+if [[ -n "$JIRA_KEY" ]]; then
+  # Transition to WIP status
+  acli jira workitem transition --key "$JIRA_KEY" --status "WIP" 2>/dev/null || echo "Note: Could not transition to WIP (may already be in WIP or invalid transition)"
+  
+  # Assign to current user (acli uses current authenticated user by default)
+  acli jira workitem assign --key "$JIRA_KEY" --assignee "@me" 2>/dev/null || echo "Note: Could not assign to current user"
+else
+  echo "No Jira key found in branch name: $args[1]"
+fi
