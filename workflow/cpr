@@ -1,0 +1,243 @@
+#!/usr/bin/env node
+/**
+ * Create Pull Request with Jira integration
+ * 
+ * Usage: node cpr
+ * 
+ * Requires: `gh` (GitHub CLI), `acli` (Atlassian CLI), `git`
+ */
+
+const { execSync } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+
+const JIRA_BASE = "";
+/** Matches Jira-style keys: one or more A–Z, hyphen, digits (e.g. CA-7231) */
+const JIRA_KEY_RE = /\b([A-Z]+-\d+)\b/g;
+
+/**
+ * Execute a shell command and return the output
+ * @param {string} cmd
+ * @returns {string}
+ */
+function exec(cmd) {
+  return execSync(cmd, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).trim();
+}
+
+/**
+ * Get the current git branch name
+ * @returns {string}
+ */
+function getCurrentBranch() {
+  try {
+    return exec("git branch --show-current");
+  } catch (err) {
+    console.error("Failed to get current branch. Are you in a git repository?");
+    process.exit(1);
+  }
+}
+
+/**
+ * Check if the current branch has unpushed commits and push if needed
+ * @param {string} branch
+ */
+function ensureBranchPushed(branch) {
+  try {
+    // Check if branch has a remote tracking branch
+    try {
+      exec("git rev-parse --abbrev-ref @{upstream}");
+    } catch {
+      // No upstream branch set, push and set upstream
+      exec(`git push -u origin ${branch}`);
+      return;
+    }
+
+    // Check if there are unpushed commits
+    const unpushedCount = exec("git rev-list @{upstream}..HEAD --count");
+    
+    if (parseInt(unpushedCount, 10) > 0) {
+      exec("git push");
+    }
+  } catch (err) {
+    console.error("Failed to push commits to remote:");
+    console.error(err.message);
+    process.exit(1);
+  }
+}
+
+/**
+ * Extract first Jira key from a string
+ * @param {string} text
+ * @returns {string | null}
+ */
+function extractJiraKey(text) {
+  JIRA_KEY_RE.lastIndex = 0;
+  const match = JIRA_KEY_RE.exec(text);
+  return match ? match[1] : null;
+}
+
+/**
+ * Get Jira issue details via Atlassian CLI
+ * @param {string} key
+ * @returns {{ summary: string; status: string }}
+ */
+function getJiraIssueDetails(key) {
+  try {
+    const out = exec(`acli jira workitem view ${key} --json`);
+    const data = JSON.parse(out);
+    const summary = data.fields?.summary || "";
+    const status = data.fields?.status?.name || "";
+    return { summary: summary.trim(), status: status.trim() };
+  } catch (err) {
+    console.error(`Failed to fetch Jira issue ${key}:`, err.message);
+    console.error("Make sure the Atlassian CLI (acli) is installed and configured.");
+    process.exit(1);
+  }
+}
+
+/**
+ * Create PR title from Jira key and summary
+ * Removes any text after the first pipe character (|)
+ * @param {string} jiraKey
+ * @param {string} summary
+ * @returns {string}
+ */
+function createPrTitle(jiraKey, summary) {
+  const pipeIndex = summary.indexOf("|");
+  const cleanSummary = pipeIndex !== -1 
+    ? summary.substring(0, pipeIndex).trim() 
+    : summary;
+  
+  return `${jiraKey} - ${cleanSummary}`;
+}
+
+/**
+ * Update Jira issue status to Code Review
+ * @param {string} jiraKey
+ * @param {string} currentStatus
+ */
+function updateJiraStatusToCodeReview(jiraKey, currentStatus) {
+  const targetStatus = "CODE REVIEW";
+  
+  if (currentStatus.toUpperCase() === targetStatus) {
+    return;
+  }
+  
+  try {
+    exec(`acli jira workitem transition --key "${jiraKey}" --status "${targetStatus}"`);
+  } catch (err) {
+    console.error(`Failed to update Jira issue status:`, err.message);
+    console.error(`You may need to manually transition ${jiraKey} to ${targetStatus}`);
+  }
+}
+
+/**
+ * Find PR template in the repository
+ * @returns {string | null} Path to template file or null if not found
+ */
+function findPrTemplate() {
+  const possiblePaths = [
+    ".github/pull_request_template.md",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md",
+    "docs/pull_request_template.md",
+    "PULL_REQUEST_TEMPLATE.md",
+    "pull_request_template.md",
+  ];
+
+  const repoRoot = exec("git rev-parse --show-toplevel");
+  
+  for (const templatePath of possiblePaths) {
+    const fullPath = path.join(repoRoot, templatePath);
+    if (fs.existsSync(fullPath)) {
+      return fullPath;
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Read and populate PR template with Jira link
+ * @param {string} templatePath
+ * @param {string} jiraKey
+ * @returns {string}
+ */
+function populateTemplate(templatePath, jiraKey) {
+  const template = fs.readFileSync(templatePath, "utf8");
+  const jiraUrl = `${JIRA_BASE}/${jiraKey}`;
+  const markdownLink = `[${jiraKey}](${jiraUrl})`;
+  
+  let populated = template;
+  
+  // First, replace existing markdown links that contain Jira keys
+  // Matches: [Jira CA-1111](url) or [CA-1111](url)
+  const markdownLinkPattern = /\[(jira\s+)?[A-Z]+-\d+\]\([^)]*\)/gi;
+  populated = populated.replace(markdownLinkPattern, markdownLink);
+  
+  // Then replace plain text "Jira CA-1111" style references (not already in links)
+  // This uses negative lookbehind to avoid matching if preceded by [
+  const plainTextPattern = /(?<!\[)\b(jira|JIRA|Jira)\s+[A-Z]+-\d+\b/g;
+  populated = populated.replace(plainTextPattern, markdownLink);
+  
+  return populated;
+}
+
+/**
+ * Create GitHub pull request
+ * @param {string} title
+ * @param {string | null} body
+ */
+function createPullRequest(title, body) {
+  try {
+    let cmd = `gh pr create --title "${title.replace(/"/g, '\\"')}"`;
+    
+    if (body) {
+      // Write body to temp file to avoid shell escaping issues
+      const tempFile = path.join(require("os").tmpdir(), `pr-body-${Date.now()}.md`);
+      fs.writeFileSync(tempFile, body);
+      cmd += ` --body-file "${tempFile}"`;
+      
+      const result = exec(cmd);
+      
+      // Clean up temp file
+      fs.unlinkSync(tempFile);
+      
+      console.log(result);
+    } else {
+      const result = exec(cmd);
+      console.log(result);
+    }
+  } catch (err) {
+    console.error("Failed to create pull request:");
+    console.error(err.message);
+    process.exit(1);
+  }
+}
+
+function main() {
+  const branch = getCurrentBranch();
+  ensureBranchPushed(branch);
+  
+  const jiraKey = extractJiraKey(branch);
+  
+  if (!jiraKey) {
+    console.error(`No Jira ticket key found in branch name: ${branch}`);
+    console.error("Expected format: branch names containing a Jira key like CA-1234");
+    process.exit(1);
+  }
+  
+  const { summary, status } = getJiraIssueDetails(jiraKey);
+  const prTitle = createPrTitle(jiraKey, summary);
+  
+  const templatePath = findPrTemplate();
+  let prBody = null;
+  if (templatePath) {
+    prBody = populateTemplate(templatePath, jiraKey);
+  }
+  
+  createPullRequest(prTitle, prBody);
+  updateJiraStatusToCodeReview(jiraKey, status);
+}
+
+main();
