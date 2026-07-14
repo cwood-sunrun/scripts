@@ -2,7 +2,7 @@
 
 Parse and sort jest output to get top N slowest tests. 
 
-Output adds a derived value of "jest overhead" for each test to measure time spent in test file outside tests.
+Output adds a derived value of "jest overhead" for each test to measure time spent in test file outside tests. This measure can be useful to identify test files that may be missing mocks, importing more files than necessary, etc.
 
 ## Usage
 
