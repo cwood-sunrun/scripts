@@ -1,0 +1,276 @@
+#!/usr/bin/env node
+/**
+ * Given a text file listing repos (org/repo-name, newline delimited),
+ * checks if develop branch has changes vs main/master with completed Jira tickets,
+ * indicating a release is ready.
+ *
+ * Determines target branch by checking if main or master exists in the repo.
+ * Processes repos concurrently using child processes (max = CPU cores).
+ *
+ * Usage: node list-possible-releases <repos-file>
+ *
+ * Requires: `gh` (GitHub CLI), `acli` (Atlassian CLI)
+ */
+
+const { execSync, fork } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const JIRA_KEY_RE = /\b([A-Z]+-\d+)\b/g;
+const COMPLETED_STATUSES = ["Testing Complete", "Done"];
+
+function usage() {
+  console.error("Usage: node list-possible-releases <repos-file>");
+  process.exit(1);
+}
+
+/**
+ * @param {string} text
+ * @returns {string[]}
+ */
+function jiraKeysFromText(text) {
+  const keys = [];
+  const seen = new Set();
+  JIRA_KEY_RE.lastIndex = 0;
+  let m;
+  while ((m = JIRA_KEY_RE.exec(text)) !== null) {
+    if (!seen.has(m[1])) {
+      seen.add(m[1]);
+      keys.push(m[1]);
+    }
+  }
+  return keys;
+}
+
+/**
+ * @param {string} message
+ */
+function commitTitle(message) {
+  const line = String(message).split(/\r?\n/, 1)[0];
+  return line ?? "";
+}
+
+/**
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} sha
+ * @returns {string}
+ */
+function fetchCommitPrBody(owner, repo, sha) {
+  try {
+    const endpoint = `repos/${owner}/${repo}/commits/${sha}/pulls`;
+    const out = execSync(`gh api "${endpoint}"`, {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const data = JSON.parse(out);
+    if (!Array.isArray(data) || data.length === 0) return "";
+    return data[0].body ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * @param {string} key
+ * @returns {string|null}
+ */
+function getJiraStatus(key) {
+  try {
+    const out = execSync(`acli jira workitem view ${key} --json`, {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const data = JSON.parse(out);
+    const statusName = data.fields?.status?.name;
+    return typeof statusName === "string" ? statusName.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {string} owner
+ * @param {string} repo
+ * @returns {string|null} 'main' or 'master' if exists, null otherwise
+ */
+function getTargetBranch(owner, repo) {
+  try {
+    const out = execSync(`gh api repos/${owner}/${repo}/branches --paginate --jq '.[].name'`, {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const branches = out.trim().split(/\r?\n/).filter(b => b);
+    if (branches.includes("main")) return "main";
+    if (branches.includes("master")) return "master";
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} base
+ * @param {string} head
+ * @returns {Array<{ sha: string; commit: { message: string } }>}
+ */
+function getCommitDiff(owner, repo, base, head) {
+  try {
+    const endpoint = `repos/${owner}/${repo}/compare/${base}...${head}`;
+    const out = execSync(`gh api "${endpoint}"`, {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const data = JSON.parse(out);
+    return data.commits ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * @param {string} owner
+ * @param {string} repo
+ * @param {Array<{ sha: string; commit: { message: string } }>} commits
+ * @returns {string[]}
+ */
+function extractJiraKeysFromCommits(owner, repo, commits) {
+  const ordered = [];
+  const seen = new Set();
+  
+  for (const c of commits) {
+    const title = commitTitle(c.commit?.message ?? "");
+    let keys = jiraKeysFromText(title);
+    
+    if (keys.length === 0) {
+      const body = fetchCommitPrBody(owner, repo, c.sha);
+      keys = jiraKeysFromText(body);
+    }
+    
+    for (const key of keys) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        ordered.push(key);
+      }
+    }
+  }
+  
+  return ordered;
+}
+
+/**
+ * @param {string} repoPath
+ */
+function checkRepo(repoPath) {
+  const [owner, repo] = repoPath.split("/");
+  if (!owner || !repo) {
+    console.error(`Invalid repo format: ${repoPath}`);
+    return;
+  }
+  
+  const targetBranch = getTargetBranch(owner, repo);
+  if (!targetBranch) {
+    console.error(`Could not find main or master branch for ${repoPath}`);
+    return;
+  }
+  
+  const commits = getCommitDiff(owner, repo, targetBranch, "develop");
+  if (commits.length === 0) {
+    return;
+  }
+  
+  const jiraKeys = extractJiraKeysFromCommits(owner, repo, commits);
+  if (jiraKeys.length === 0) {
+    return;
+  }
+  
+  const completedKeys = [];
+  for (const key of jiraKeys) {
+    const status = getJiraStatus(key);
+    if (status && COMPLETED_STATUSES.includes(status)) {
+      completedKeys.push(key);
+    }
+  }
+  
+  if (completedKeys.length > 0) {
+    console.log(`${repoPath}`);
+  }
+}
+
+/**
+ * Worker mode - process a single repo
+ */
+function workerMode() {
+  const repoPath = process.argv[3];
+  if (!repoPath) {
+    process.exit(1);
+  }
+  checkRepo(repoPath);
+}
+
+/**
+ * Coordinator mode - manage worker pool
+ */
+async function coordinatorMode() {
+  const reposFile = process.argv[2];
+  if (!reposFile) {
+    usage();
+  }
+  
+  if (!fs.existsSync(reposFile)) {
+    console.error(`File not found: ${reposFile}`);
+    process.exit(1);
+  }
+  
+  const content = fs.readFileSync(reposFile, "utf8");
+  const repos = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+  
+  const maxWorkers = os.cpus().length;
+  const queue = [...repos];
+  const active = new Set();
+  
+  return new Promise((resolve) => {
+    function spawnNext() {
+      if (queue.length === 0 && active.size === 0) {
+        resolve();
+        return;
+      }
+      
+      while (queue.length > 0 && active.size < maxWorkers) {
+        const repo = queue.shift();
+        const worker = fork(__filename, ["--worker", repo], {
+          stdio: "inherit",
+        });
+        
+        active.add(worker);
+        
+        worker.on("exit", () => {
+          active.delete(worker);
+          spawnNext();
+        });
+      }
+    }
+    
+    spawnNext();
+  });
+}
+
+async function main() {
+  if (process.argv[2] === "--worker") {
+    workerMode();
+  } else {
+    await coordinatorMode();
+  }
+}
+
+main();
