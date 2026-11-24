@@ -22,77 +22,36 @@ function fetchFirstReview(repo, prNumber) {
   return JSON.parse(trimmed);
 }
 
-function min(vals) {
-  return Math.min(...vals);
-}
-
-function max(vals) {
-  return Math.max(...vals);
-}
-
-function average(vals) {
-  return vals.reduce((a, b) => a + b, 0) / vals.length;
-}
-
-function median(vals) {
-  const sorted = [...vals].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-}
-
-function computeStats(waitTimesMs) {
-  if (!waitTimesMs.length) return null;
-  const secs = waitTimesMs.map((ms) => Math.floor(ms / 1_000));
-  return {
-    count: secs.length,
-    min: min(secs),
-    max: max(secs),
-    avg: Math.floor(average(secs)),
-    median: Math.floor(median(secs)),
-  };
-}
-
-function intervalKey(date, interval) {
-  const d = new Date(date);
-  if (interval === "month") {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+// Milliseconds between start and end, excluding Saturdays and Sundays (local time).
+function weekdayDurationMs(start, end) {
+  if (end <= start) return 0;
+  let total = 0;
+  let cursor = new Date(start);
+  while (cursor < end) {
+    const nextMidnight = new Date(
+      cursor.getFullYear(),
+      cursor.getMonth(),
+      cursor.getDate() + 1,
+    );
+    const segmentEnd = nextMidnight < end ? nextMidnight : end;
+    const day = cursor.getDay();
+    if (day !== 0 && day !== 6) total += segmentEnd - cursor;
+    cursor = segmentEnd;
   }
-  // ISO week: Monday-based
-  const day = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-  const dayNum = day.getUTCDay() || 7;
-  day.setUTCDate(day.getUTCDate() + 4 - dayNum);
-  const yearStart = new Date(Date.UTC(day.getUTCFullYear(), 0, 1));
-  const weekNo = Math.ceil(((day - yearStart) / 86400000 + 1) / 7);
-  return `${day.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
-}
-
-function groupByInterval(results, interval) {
-  const buckets = {};
-  for (const r of results) {
-    const key = intervalKey(r.createdAt, interval);
-    (buckets[key] ??= []).push(r);
-  }
-  return buckets;
-}
-
-function statsRow(label, stats) {
-  if (!stats) return `${label}, 0, , , ,`;
-  return `${label}, ${stats.count}, ${stats.min}, ${stats.max}, ${stats.avg}, ${stats.median}`;
+  return total;
 }
 
 const reposFile = process.argv[2];
 const sinceDate = process.argv[3];
-const interval = process.argv[4]; // optional: 'week' | 'month'
 
 if (!reposFile || !sinceDate) {
   console.error(
-    "Usage: node time-until-first-review.js <repos-file> <since-date> [week|month]",
+    "Usage: node time-until-first-review.js <repos-file> <since-date>",
   );
   console.error(
     "  <repos-file>   Newline-delimited file of owner/repo entries",
   );
   console.error("  <since-date>   Date in YYYY-MM-DD format");
-  console.error("  [week|month]   Optional interval for aggregated stats");
   process.exit(1);
 }
 
@@ -100,11 +59,6 @@ if (!/^\d{4}-\d{2}-\d{2}$/.test(sinceDate)) {
   console.error(
     `Error: invalid date format "${sinceDate}", expected YYYY-MM-DD`,
   );
-  process.exit(1);
-}
-
-if (interval && interval !== "week" && interval !== "month") {
-  console.error(`Error: interval must be "week" or "month", got "${interval}"`);
   process.exit(1);
 }
 
@@ -151,7 +105,7 @@ for (const repo of repos) {
 
     if (firstReview) {
       reviewedAt = new Date(firstReview.submitted_at);
-      waitTime = reviewedAt - createdAt;
+      waitTime = weekdayDurationMs(createdAt, reviewedAt);
     }
 
     results.push({
@@ -171,21 +125,10 @@ results.sort((a, b) => a.createdAt - b.createdAt);
 
 const reviewed = results.filter((r) => r.waitTime !== null);
 
-if (!interval) {
-  console.log("repo, prNum, wait_seconds");
-  for (const pr of reviewed) {
-    console.log(`${pr.repo}, ${pr.number}, ${Math.floor(pr.waitTime / 1_000)}`);
-  }
-}
-
-if (interval) {
+console.log("repo, pr_num, pr_author, created_date, wait_seconds");
+for (const pr of reviewed) {
+  const createdDate = pr.createdAt.toISOString().slice(0, 10);
   console.log(
-    `\ninterval, count, min_seconds, max_seconds, avg_seconds, median_seconds`,
+    `${pr.repo}, ${pr.number}, ${pr.author}, ${createdDate}, ${Math.floor(pr.waitTime / 1_000)}`,
   );
-  const buckets = groupByInterval(reviewed, interval);
-  for (const key of Object.keys(buckets).sort()) {
-    console.log(
-      statsRow(key, computeStats(buckets[key].map((r) => r.waitTime))),
-    );
-  }
 }
